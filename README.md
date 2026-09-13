@@ -30,6 +30,27 @@ go run ./cmd/bookmarks
 go build -o bin/bookmarks ./cmd/bookmarks
 ```
 
+## Docker
+
+На сервере нужны только `docker-compose.yml` и `.env`. Образ — scratch (статический бинарник + CA-сертификаты), публикуется CI в GHCR.
+
+```bash
+cp docker-compose.yml .env.example .  # или скачайте compose из репозитория
+cp .env.example .env
+# в .env задайте BOOKMARKS_PASSWORD (и по желанию COOKIE_SECRET)
+mkdir -p data backups
+docker compose pull
+docker compose up -d
+```
+
+Кабинет: `http://127.0.0.1:30080`. Проброс наружу — на вашей стороне (Caddy, nginx, firewall).
+
+SQLite лежит в `./data`, бэкапы — в `./backups` на хосте, не в контейнере.
+
+Первый пуш CI создаёт пакет `ghcr.io/somnisom/bookmarks`. Если `docker compose pull` просит логин — в GitHub: Packages → bookmarks → Package settings → Change visibility → Public.
+
+Локальная сборка образа: `docker build -t ghcr.io/somnisom/bookmarks:latest .`
+
 ## Кабинет
 
 - `/` — дерево, поиск, теги, предпросмотр OG, заметки

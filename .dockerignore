@@ -1,0 +1,16 @@
+.git
+.github
+data
+backups
+bin
+dist
+*.sqlite
+*.sqlite-*
+.env
+.env.*
+!.env.example
+extensions
+README.md
+Makefile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,19 @@
+services:
+  bookmarks:
+    image: ${BOOKMARKS_IMAGE:-ghcr.io/somnisom/bookmarks:latest}
+    container_name: bookmarks
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:30080:8080"
+    env_file:
+      - .env
+    environment:
+      LISTEN: "0.0.0.0:8080"
+      DB_PATH: /data/bookmarks.sqlite
+      BACKUP_DIR: /backups
+    volumes:
+      - ./data:/data
+      - ./backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp

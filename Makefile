@@ -1,7 +1,7 @@
 GO ?= $(HOME)/.local/go/bin/go
 export PATH := $(HOME)/.local/go/bin:$(PATH)
 
-.PHONY: run build test extensions
+.PHONY: run build test extensions image
 
 run:
 	$(GO) run ./cmd/bookmarks
@@ -9,6 +9,9 @@ run:
 build:
 	mkdir -p bin
 	$(GO) build -o bin/bookmarks ./cmd/bookmarks
+
+image:
+	docker build -t ghcr.io/somnisom/bookmarks:latest .
 
 extensions:
 	@for d in chrome firefox; do \
