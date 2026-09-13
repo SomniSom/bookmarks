@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Настройки — Закладки</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">Закладки</a>
+    <nav>
+      <a href="/">Дерево</a>
+      <a href="/trash">Корзина</a>
+      <a href="/settings" aria-current="page">Настройки</a>
+    </nav>
+    <form method="post" action="/logout"><button class="ghost" type="submit">Выйти</button></form>
+  </header>
+  <main class="page settings">
+    <h1>Настройки</h1>
+
+    <section>
+      <h2>Расширения</h2>
+      <p class="warn hidden" id="extWarn">Без входа любое расширение, которое достучится до сервера, сможет добавлять закладки. Оставляйте выключенным только на localhost.</p>
+      <label class="toggle">
+        <input type="checkbox" id="reqExt" checked>
+        Требовать вход в расширениях
+      </label>
+      <p class="muted">API по умолчанию: <code id="listen"></code>. Расширения ставятся вручную: Chrome — «Загрузить распакованное» из <code>extensions/chrome</code>; Firefox — <code>about:debugging</code> → <code>extensions/firefox</code>.</p>
+      <table class="sessions">
+        <thead><tr><th>Браузер</th><th>IP</th><th>Device</th><th>Был</th><th></th></tr></thead>
+        <tbody id="sessions"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Пароль</h2>
+      <form id="passForm" class="stack">
+        <label>Текущий <input type="password" id="curPass" required></label>
+        <label>Новый <input type="password" id="newPass" required minlength="4"></label>
+        <button type="submit">Сменить пароль</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>JSON</h2>
+      <p>
+        <a class="btn" href="/api/export">Скачать экспорт</a>
+        <a class="btn ghost" href="/api/export?trash=1">Включая корзину</a>
+      </p>
+      <form id="importForm" class="stack">
+        <label>Файл <input type="file" id="importFile" accept="application/json"></label>
+        <label class="toggle"><input type="checkbox" id="importReplace"> Заменить всё дерево</label>
+        <button type="submit">Импортировать</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Бэкапы</h2>
+      <form id="backupForm" class="stack">
+        <label>Каталог <input id="backupDir"></label>
+        <label>Интервал, часов (0 — выкл) <input id="backupIv" type="number" min="0"></label>
+        <label>Хранить копий <input id="backupRet" type="number" min="1"></label>
+        <p class="muted">Последний: <span id="lastBackup">нет</span></p>
+        <div class="row">
+          <button type="submit">Сохранить</button>
+          <button type="button" id="backupNow">Бэкап сейчас</button>
+        </div>
+      </form>
+    </section>
+
+    <section>
+      <h2>Ссылки</h2>
+      <p class="muted">Проверка не запускается сама при старте сервера.</p>
+      <button type="button" id="checkAll">Проверить все ссылки</button>
+      <p id="checkStatus" class="muted"></p>
+    </section>
+  </main>
+  <script src="/static/settings.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Закладки</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">Закладки</a>
+    <nav>
+      <a href="/">Дерево</a>
+      <a href="/trash">Корзина</a>
+      <a href="/settings">Настройки</a>
+    </nav>
+    <form method="post" action="/logout"><button class="ghost" type="submit">Выйти</button></form>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Поиск…" autocomplete="off">
+        <button type="button" id="btnFolder" title="Новая папка">Папка</button>
+        <button type="button" id="btnBookmark" title="Новая закладка">Ссылка</button>
+      </div>
+      <div id="tags" class="tags"></div>
+      <div id="tree" class="tree" tabindex="0"></div>
+    </aside>
+    <main id="preview" class="preview">
+      <div class="empty">Выберите закладку или папку.</div>
+    </main>
+  </div>
+  <dialog id="dlg">
+    <form id="dlgForm" method="dialog">
+      <h2 id="dlgTitle">Новая закладка</h2>
+      <label>Название <input id="fTitle" required></label>
+      <label id="urlWrap">URL <input id="fUrl" type="url"></label>
+      <label>Папка
+        <select id="fParent"></select>
+      </label>
+      <label id="tagsWrap">Теги <input id="fTags" placeholder="через запятую"></label>
+      <label id="notesWrap">Заметка <textarea id="fNotes" rows="3"></textarea></label>
+      <p id="dupWarn" class="flash hidden"></p>
+      <menu>
+        <button value="cancel" type="button" id="dlgCancel">Отмена</button>
+        <button id="dlgOk" value="ok">Сохранить</button>
+      </menu>
+    </form>
+  </dialog>
+  <script src="/static/app.js"></script>
+</body>
+</html>

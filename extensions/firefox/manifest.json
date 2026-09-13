@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Закладки",
+  "description": "Быстрое добавление вкладок в личный сервер закладок",
+  "version": "1.0.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Закладки",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "permissions": [
+    "storage",
+    "bookmarks",
+    "tabs",
+    "activeTab",
+    "contextMenus",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8080/*",
+    "http://localhost:8080/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "omnibox": {
+    "keyword": "bm"
+  },
+  "commands": {
+    "add-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Добавить текущую вкладку в закладки"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bookmarks@local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

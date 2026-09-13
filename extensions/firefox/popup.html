@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Закладки</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Закладки</h1>
+  <p id="device" class="muted"></p>
+  <label>Сервер <input id="server" type="url"></label>
+  <div id="auth">
+    <label>Пароль <input id="password" type="password"></label>
+    <button type="button" id="loginBtn">Войти</button>
+  </div>
+  <div id="form" hidden>
+    <label>Название <input id="title"></label>
+    <label>URL <input id="url"></label>
+    <label>Папка <select id="folder"></select></label>
+    <label>Теги <input id="tags" list="taglist" placeholder="через запятую"></label>
+    <datalist id="taglist"></datalist>
+    <p id="dup" class="warn" hidden></p>
+    <button type="button" id="saveBtn">Сохранить вкладку</button>
+    <hr>
+    <label>Имя папки импорта <input id="importName" placeholder="Импорт Chrome — дата"></label>
+    <button type="button" id="importBtn">Импортировать закладки браузера</button>
+    <button type="button" id="logoutBtn" class="ghost">Выйти</button>
+  </div>
+  <p id="status"></p>
+  <script src="api.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

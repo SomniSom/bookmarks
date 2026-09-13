@@ -1,0 +1,10 @@
+body { font: 13px/1.4 system-ui, sans-serif; width: 320px; margin: 0; padding: 10px 12px; background: #14110c; color: #efe7d6; }
+h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
+label { display: block; margin: .4rem 0; color: #9a907c; }
+input, select { width: 100%; box-sizing: border-box; margin-top: .15rem; background: #0f0d0a; color: #efe7d6; border: 1px solid #2e2a22; border-radius: 4px; padding: .35rem; }
+button { margin-top: .45rem; width: 100%; padding: .4rem; border: 0; border-radius: 4px; background: #d0a24a; color: #1a1408; cursor: pointer; }
+button.ghost { background: transparent; color: #efe7d6; border: 1px solid #2e2a22; }
+.muted { color: #9a907c; font-size: .75rem; }
+.warn, .err { color: #f0c8c0; }
+.ok { color: #b5d19a; }
+hr { border: 0; border-top: 1px solid #2e2a22; margin: .8rem 0; }

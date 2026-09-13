@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — Закладки</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="auth-body">
+  <form class="auth-card" method="post" action="/login">
+    <p class="eyebrow">личное хранилище</p>
+    <h1>Закладки</h1>
+    <p class="muted">Введите пароль владельца.</p>
+    {{if eq .Error "1"}}<p class="flash">Неверный пароль.</p>{{end}}
+    <label>Пароль
+      <input type="password" name="password" required autofocus>
+    </label>
+    <button type="submit">Войти</button>
+  </form>
+</body>
+</html>

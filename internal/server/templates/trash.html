@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Корзина — Закладки</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">Закладки</a>
+    <nav>
+      <a href="/">Дерево</a>
+      <a href="/trash" aria-current="page">Корзина</a>
+      <a href="/settings">Настройки</a>
+    </nav>
+    <form method="post" action="/logout"><button class="ghost" type="submit">Выйти</button></form>
+  </header>
+  <main class="page">
+    <div class="page-head">
+      <h1>Корзина</h1>
+      <button type="button" id="empty" class="danger">Очистить корзину</button>
+    </div>
+    <ul id="list" class="trash-list"></ul>
+  </main>
+  <script src="/static/trash.js"></script>
+</body>
+</html>

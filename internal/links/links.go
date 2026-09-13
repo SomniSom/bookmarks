@@ -1,0 +1,127 @@
+package links
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"sync"
+	"time"
+
+	"bookmarks/internal/store"
+)
+
+type Checker struct {
+	Store   *store.Store
+	mu      sync.Mutex
+	running bool
+	checked int
+	total   int
+}
+
+type Status struct {
+	Running bool `json:"running"`
+	Checked int  `json:"checked"`
+	Total   int  `json:"total"`
+}
+
+func (c *Checker) Status() Status {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Status{Running: c.running, Checked: c.checked, Total: c.total}
+}
+
+func (c *Checker) CheckOne(rawURL string) (status int, errMsg string) {
+	status, errMsg = probe(rawURL)
+	return
+}
+
+func (c *Checker) CheckAll() bool {
+	c.mu.Lock()
+	if c.running {
+		c.mu.Unlock()
+		return false
+	}
+	c.running = true
+	c.checked = 0
+	c.total = 0
+	c.mu.Unlock()
+	go c.run()
+	return true
+}
+
+func (c *Checker) run() {
+	defer func() {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+	}()
+	list, err := c.Store.LiveBookmarks()
+	if err != nil {
+		return
+	}
+	c.mu.Lock()
+	c.total = len(list)
+	c.mu.Unlock()
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, n := range list {
+		n := n
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			st, msg := probe(n.URL)
+			var sp *int
+			if st > 0 {
+				sp = &st
+			}
+			_ = c.Store.UpdateLink(n.ID, sp, msg)
+			c.mu.Lock()
+			c.checked++
+			c.mu.Unlock()
+		}()
+	}
+	wg.Wait()
+}
+
+func probe(rawURL string) (int, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 8 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	do := func(method string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Bookmarks/1.0 (+link check)")
+		return client.Do(req)
+	}
+	resp, err := do(http.MethodHead)
+	if err != nil {
+		resp, err = do(http.MethodGet)
+		if err != nil {
+			return 0, err.Error()
+		}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+		resp2, err := do(http.MethodGet)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp2.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp2.Body, 4096))
+		return resp2.StatusCode, ""
+	}
+	return resp.StatusCode, ""
+}

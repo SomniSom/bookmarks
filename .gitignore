@@ -1,0 +1,12 @@
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/
+backups/
+bin/
+dist/
+/bookmarks
+cmd/bookmarks/bookmarks
+.DS_Store
+*.exe
