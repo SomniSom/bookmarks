@@ -59,7 +59,14 @@ label { display: block; margin: .6rem 0; color: var(--muted); font-size: .85rem;
 .preview { padding: 1.4rem 1.6rem; overflow: auto; }
 .empty { color: var(--muted); font-family: var(--serif); font-size: 1.2rem; }
 .card h1 { font-family: var(--serif); font-weight: 600; margin: .4rem 0 .3rem; font-size: 1.7rem; }
-.card .hero { width: 100%; max-height: 280px; object-fit: cover; border-radius: 8px; background: #0d0c0a; }
+.card .hero-wrap {
+  display: flex; justify-content: center; align-items: center;
+  margin: 0 0 .8rem; background: #0d0c0a; border-radius: 8px;
+}
+.card .hero {
+  display: block; max-width: 100%; width: auto; height: auto;
+  object-fit: contain; border-radius: 8px;
+}
 .card .meta { color: var(--muted); }
 .card .url { word-break: break-all; }
 .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin: .8rem 0; }

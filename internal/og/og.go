@@ -1,6 +1,7 @@
 package og
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/url"
@@ -9,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/net/html"
+
+	"bookmarks/internal/netguard"
 )
 
 type Meta struct {
@@ -18,22 +21,17 @@ type Meta struct {
 	Favicon     string
 }
 
-func Fetch(rawURL string) Meta {
+func Fetch(ctx context.Context, rawURL string) Meta {
 	var m Meta
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return m
 	}
-	client := &http.Client{
-		Timeout: 8 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 8 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
+	if err := netguard.CheckURL(ctx, u.String()); err != nil {
+		m.Favicon = googleFavicon(u.Host)
+		return m
 	}
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return m
 	}
@@ -44,12 +42,13 @@ func Fetch(rawURL string) Meta {
 		m.Favicon = googleFavicon(u.Host)
 		return m
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	final := resp.Request.URL
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil || !utf8.Valid(body) {
-		// still try parse; many pages are utf-8
+	if err != nil {
+		return m
 	}
+	_ = utf8.Valid(body) // не-UTF8 всё равно парсим: разметку ищет токенизатор
 	m = parseHTML(string(body), final)
 	if m.Title == "" {
 		m.Title = final.Host
@@ -58,6 +57,18 @@ func Fetch(rawURL string) Meta {
 		m.Favicon = googleFavicon(final.Host)
 	}
 	return m
+}
+
+// client общий на процесс: переиспользует соединения при массовом обновлении OG.
+var client = &http.Client{
+	Timeout:   8 * time.Second,
+	Transport: netguard.Transport(32, 4),
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 8 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
 }
 
 func googleFavicon(host string) string {

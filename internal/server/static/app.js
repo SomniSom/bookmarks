@@ -55,16 +55,45 @@ function findNode(id, nodes = tree) {
 }
 
 function folderOptions(nodes = tree, prefix = "", skip = null) {
-  let html = `<option value="">Корень</option>`;
-  const add = (list, pfx) => {
-    for (const n of list || []) {
-      if (n.type === "folder" && n.id !== skip) {
-        html += `<option value="${n.id}">${esc(pfx + n.title)}</option>`;
-        add(n.children, pfx + n.title + " / ");
+  const skipSet = new Set();
+  if (skip) {
+    const stack = [...(nodes || [])];
+    let found = null;
+    const seen = new Set();
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || seen.has(n.id)) continue;
+      seen.add(n.id);
+      if (n.id === skip) {
+        found = n;
+        break;
       }
+      if (Array.isArray(n.children)) stack.push(...n.children);
     }
-  };
-  add(nodes, prefix);
+    if (found) {
+      const q = [found];
+      while (q.length) {
+        const n = q.pop();
+        if (!n || skipSet.has(n.id)) continue;
+        skipSet.add(n.id);
+        if (Array.isArray(n.children)) q.push(...n.children);
+      }
+    } else skipSet.add(skip);
+  }
+  let html = `<option value="">Корень</option>`;
+  const stack = [];
+  for (let i = (nodes || []).length - 1; i >= 0; i--) stack.push({ n: nodes[i], pfx: "" });
+  const seen = new Set();
+  while (stack.length) {
+    const { n, pfx } = stack.pop();
+    if (!n || seen.has(n.id)) continue;
+    seen.add(n.id);
+    if (n.type === "folder" && !skipSet.has(n.id)) {
+      html += `<option value="${n.id}">${esc(pfx + n.title)}</option>`;
+      const ch = n.children || [];
+      for (let i = ch.length - 1; i >= 0; i--) stack.push({ n: ch[i], pfx: pfx + n.title + " / " });
+    }
+  }
   return html;
 }
 
@@ -198,7 +227,7 @@ function renderPreview() {
       <h1>${esc(n.title)}</h1>
       <p class="muted">${(n.children || []).length} элементов</p>
       <div class="actions">
-        <button type="button" data-act="rename">Переименовать</button>
+        <button type="button" data-act="rename">Изменить</button>
         <button type="button" class="danger" data-act="del">В корзину</button>
       </div></article>`;
   } else {
@@ -206,7 +235,7 @@ function renderPreview() {
       .map((t) => `<span class="chip" style="border-color:${tagColor(t.name)}">${esc(t.name)}</span>`)
       .join("");
     preview.innerHTML = `<article class="card">
-      ${n.ogImage ? `<img class="hero" src="${esc(n.ogImage)}" alt="">` : ""}
+      ${n.ogImage ? `<a class="hero-wrap" href="${esc(n.ogImage)}" target="_blank" rel="noopener"><img class="hero" src="${esc(n.ogImage)}" alt=""></a>` : ""}
       <p class="eyebrow">закладка</p>
       <h1>${esc(n.ogTitle || n.title)}</h1>
       <p class="meta">${esc(n.ogDescription || "")}</p>
@@ -306,7 +335,17 @@ $("dlgOk").onclick = async (e) => {
   };
   try {
     if (dlg.dataset.edit) {
-      await api(`/api/nodes/${dlg.dataset.edit}`, { method: "PATCH", body: JSON.stringify(body) });
+      const id = dlg.dataset.edit;
+      const prev = findNode(id);
+      await api(`/api/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+      const nextParent = $("fParent").value || "";
+      const prevParent = prev?.parentId || "";
+      if (nextParent !== prevParent) {
+        await api(`/api/nodes/${id}/move`, {
+          method: "POST",
+          body: JSON.stringify({ parentId: nextParent || null }),
+        });
+      }
     } else {
       await api("/api/nodes", { method: "POST", body: JSON.stringify(body) });
     }

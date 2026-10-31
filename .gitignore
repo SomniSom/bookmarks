@@ -6,6 +6,12 @@ data/
 backups/
 bin/
 dist/
+web-ext-artifacts/
+.web-extension-id
+.tools/
+coverage.out
+.amo-upload-uuid
+*.bak-*
 /bookmarks
 cmd/bookmarks/bookmarks
 .DS_Store

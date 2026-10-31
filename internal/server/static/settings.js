@@ -19,7 +19,13 @@ async function load() {
   const s = await api("/api/settings");
   $("reqExt").checked = s.requireExtensionAuth;
   $("extWarn").classList.toggle("hidden", s.requireExtensionAuth);
-  $("listen").textContent = "http://" + s.listen;
+  const publicUrl = location.origin;
+  $("publicUrl").textContent = publicUrl;
+  const listen = "http://" + s.listen;
+  if (listen !== publicUrl) {
+    $("listenHint").textContent = "Слушает " + listen + " — в расширение вставляйте адрес из адресной строки, не этот.";
+    $("listenHint").classList.remove("hidden");
+  }
   $("backupDir").value = s.backupDir || "";
   $("backupIv").value = s.backupIntervalHours || "24";
   $("backupRet").value = s.backupRetention || "14";
@@ -108,6 +114,16 @@ $("checkAll").onclick = async () => {
     if (st.running) setTimeout(tick, 800);
   };
   tick();
+};
+
+$("copyUrl").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("publicUrl").textContent);
+    $("copyUrl").textContent = "Скопировано";
+    setTimeout(() => ($("copyUrl").textContent = "Копировать"), 1500);
+  } catch (_) {
+    alert($("publicUrl").textContent);
+  }
 };
 
 load();

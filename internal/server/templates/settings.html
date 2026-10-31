@@ -26,7 +26,9 @@
         <input type="checkbox" id="reqExt" checked>
         Требовать вход в расширениях
       </label>
-      <p class="muted">API по умолчанию: <code id="listen"></code>. Расширения ставятся вручную: Chrome — «Загрузить распакованное» из <code>extensions/chrome</code>; Firefox — <code>about:debugging</code> → <code>extensions/firefox</code>.</p>
+      <p class="muted">В расширении достаточно домена, без <code>https://</code>. Скопируйте адрес кабинета:</p>
+      <p class="actions"><code id="publicUrl"></code> <button type="button" class="ghost" id="copyUrl">Копировать</button></p>
+      <p class="muted hidden" id="listenHint"></p>
       <table class="sessions">
         <thead><tr><th>Браузер</th><th>IP</th><th>Device</th><th>Был</th><th></th></tr></thead>
         <tbody id="sessions"></tbody>

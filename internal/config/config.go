@@ -13,6 +13,8 @@ type Config struct {
 	CookieSecret      string
 	TrustedProxy      bool
 	BackupDir         string
+	// BlockPrivateURLs запрещает проверке ссылок и OG-фетчу ходить в приватные сети.
+	BlockPrivateURLs bool
 }
 
 func FromEnv() Config {
@@ -23,6 +25,7 @@ func FromEnv() Config {
 		CookieSecret:      os.Getenv("COOKIE_SECRET"),
 		TrustedProxy:      parseBool(os.Getenv("TRUSTED_PROXY")),
 		BackupDir:         env("BACKUP_DIR", "./backups"),
+		BlockPrivateURLs:  parseBool(os.Getenv("BLOCK_PRIVATE_URLS")),
 	}
 	return c
 }

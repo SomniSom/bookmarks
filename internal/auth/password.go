@@ -40,7 +40,7 @@ func VerifyPassword(encoded, password string) bool {
 	}
 	var memory, time uint32
 	var threads uint8
-	for _, kv := range strings.Split(parts[3], ",") {
+	for kv := range strings.SplitSeq(parts[3], ",") {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
 			return false

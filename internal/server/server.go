@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,9 +11,9 @@ import (
 	"errors"
 	"html/template"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,12 +58,14 @@ type Server struct {
 	tplApp   *template.Template
 	tplTrash *template.Template
 	tplSet   *template.Template
+	limiter  *loginLimiter
+	static   map[string]staticFile
 }
 
 func New(cfg config.Config, st *store.Store) (*Server, error) {
 	sec := cfg.CookieSecret
 	if sec == "" {
-		v, err := st.CookieSecret()
+		v, err := st.CookieSecret(context.Background())
 		if err != nil {
 			return nil, err
 		}
@@ -71,8 +74,13 @@ func New(cfg config.Config, st *store.Store) (*Server, error) {
 	parse := func(name string) *template.Template {
 		return template.Must(template.ParseFS(embedded, "templates/"+name))
 	}
+	staticFiles, err := loadStatic(embedded)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		cfg:      cfg,
+		static:   staticFiles,
 		store:    st,
 		links:    &links.Checker{Store: st},
 		secret:   []byte(sec),
@@ -80,17 +88,14 @@ func New(cfg config.Config, st *store.Store) (*Server, error) {
 		tplApp:   parse("app.html"),
 		tplTrash: parse("trash.html"),
 		tplSet:   parse("settings.html"),
+		limiter:  newLoginLimiter(10, 5*time.Minute),
 	}
 	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	static, err := fs.Sub(embedded, "static")
-	if err != nil {
-		log.Fatal(err)
-	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
+	mux.HandleFunc("GET /static/{path...}", s.serveStatic)
 
 	mux.HandleFunc("GET /login", s.pageLogin)
 	mux.HandleFunc("POST /login", s.postLogin)
@@ -133,7 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/links/check-all", s.webAPI(s.apiCheckAll))
 	mux.HandleFunc("GET /api/links/status", s.webAPI(s.apiLinkStatus))
 
-	return s.cors(mux)
+	return s.securityHeaders(s.compress(s.cors(mux)))
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
@@ -182,7 +187,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token 
 		MaxAge:   int(webTTL.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+		Secure:   r.TLS != nil || (s.cfg.TrustedProxy && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")),
 	})
 }
 
@@ -199,7 +204,7 @@ func (s *Server) webIdentity(r *http.Request) bool {
 	if !ok {
 		return false
 	}
-	return s.store.TouchWebSession(token, webTTL)
+	return s.store.TouchWebSession(r.Context(), token, webTTL)
 }
 
 func (s *Server) identifyAPI(r *http.Request) *identity {
@@ -215,12 +220,12 @@ func (s *Server) identifyAPI(r *http.Request) *identity {
 	}
 	device := r.Header.Get("X-Device-Id")
 	if token != "" {
-		if _, err := s.store.GetExtByToken(token, device); err != nil {
+		if _, err := s.store.GetExtByToken(r.Context(), token, device); err != nil {
 			return nil
 		}
 		return &identity{Kind: identExt}
 	}
-	if extOrigin && !s.store.RequireExtAuth() {
+	if extOrigin && !s.store.RequireExtAuth(r.Context()) {
 		return &identity{Kind: identExtOpen}
 	}
 	return nil
@@ -258,6 +263,20 @@ func (s *Server) apiAuth(next http.HandlerFunc, allowExt bool) http.HandlerFunc 
 	}
 }
 
+// render собирает страницу в буфере: ошибка шаблона не должна отдавать
+// клиенту половину HTML с кодом 200.
+func (s *Server) render(w http.ResponseWriter, tpl *template.Template, data any) {
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		log.Printf("template %s: %v", tpl.Name(), err)
+		http.Error(w, "ошибка рендера страницы", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	_, _ = buf.WriteTo(w)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
@@ -265,7 +284,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func readJSON(r *http.Request, v any) error {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	dec := json.NewDecoder(io.LimitReader(r.Body, 8<<20))
 	return dec.Decode(v)
 }
@@ -275,18 +294,25 @@ func (s *Server) pageLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tplLogin.Execute(w, map[string]any{"Error": r.URL.Query().Get("e")})
+	s.render(w, s.tplLogin, map[string]any{"Error": r.URL.Query().Get("e")})
 }
 
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
+	ip := auth.ClientIP(r, s.cfg.TrustedProxy)
+	if !s.limiter.Allow(ip) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "слишком много попыток входа, попробуйте позже", http.StatusTooManyRequests)
+		return
+	}
 	_ = r.ParseForm()
 	pass := r.FormValue("password")
-	if !s.store.CheckPassword(pass) {
+	if !s.store.CheckPassword(r.Context(), pass) {
+		s.limiter.Fail(ip)
 		http.Redirect(w, r, "/login?e=1", http.StatusSeeOther)
 		return
 	}
-	token, err := s.store.CreateWebSession(webTTL)
+	s.limiter.Reset(ip)
+	token, err := s.store.CreateWebSession(r.Context(), webTTL)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -298,7 +324,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		if token, ok := s.parseCookie(c.Value); ok {
-			s.store.DeleteWebSession(token)
+			s.store.DeleteWebSession(r.Context(), token)
 		}
 	}
 	s.clearCookie(w)
@@ -310,18 +336,15 @@ func (s *Server) pageApp(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tplApp.Execute(w, nil)
+	s.render(w, s.tplApp, nil)
 }
 
-func (s *Server) pageTrash(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tplTrash.Execute(w, nil)
+func (s *Server) pageTrash(w http.ResponseWriter, _ *http.Request) {
+	s.render(w, s.tplTrash, nil)
 }
 
-func (s *Server) pageSettings(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tplSet.Execute(w, nil)
+func (s *Server) pageSettings(w http.ResponseWriter, _ *http.Request) {
+	s.render(w, s.tplSet, nil)
 }
 
 func (s *Server) apiExtLogin(w http.ResponseWriter, r *http.Request) {
@@ -333,12 +356,12 @@ func (s *Server) apiExtLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	if strings.TrimSpace(req.DeviceID) == "" || !s.store.CheckPassword(req.Password) {
+	if strings.TrimSpace(req.DeviceID) == "" || !s.store.CheckPassword(r.Context(), req.Password) {
 		writeJSON(w, 401, map[string]string{"error": "неверный пароль"})
 		return
 	}
 	ua := r.Header.Get("User-Agent")
-	token, sess, err := s.store.CreateExtSession(req.DeviceID, auth.ClientIP(r, s.cfg.TrustedProxy), ua, auth.BrowserFromUA(ua))
+	token, sess, err := s.store.CreateExtSession(r.Context(), req.DeviceID, auth.ClientIP(r, s.cfg.TrustedProxy), ua, auth.BrowserFromUA(ua))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -347,7 +370,7 @@ func (s *Server) apiExtLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiTree(w http.ResponseWriter, r *http.Request) {
-	tree, err := s.store.Tree()
+	tree, err := s.store.Tree(r.Context())
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -359,7 +382,7 @@ func (s *Server) apiTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.Search(r.URL.Query().Get("q"))
+	list, err := s.store.Search(r.Context(), r.URL.Query().Get("q"))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -371,7 +394,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiTags(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.Tags()
+	list, err := s.store.Tags(r.Context())
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -383,7 +406,7 @@ func (s *Server) apiTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiDuplicates(w http.ResponseWriter, r *http.Request) {
-	d, err := s.store.Duplicates(r.URL.Query().Get("url"), r.URL.Query().Get("except"))
+	d, err := s.store.Duplicates(r.Context(), r.URL.Query().Get("url"), r.URL.Query().Get("except"))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -410,14 +433,14 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Type == "bookmark" && !req.ConfirmDuplicate {
-		dups, _ := s.store.Duplicates(req.URL, "")
+		dups, _ := s.store.Duplicates(r.Context(), req.URL, "")
 		if len(dups) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "duplicate", "duplicates": dups})
 			return
 		}
 	}
 	n := &store.Node{Type: req.Type, ParentID: req.ParentID, Title: req.Title, URL: req.URL, Notes: req.Notes}
-	created, err := s.store.CreateNode(n, req.Tags)
+	created, err := s.store.CreateNode(r.Context(), n, req.Tags)
 	if err != nil {
 		code := 400
 		if errors.Is(err, store.ErrForbiddenURL) {
@@ -431,25 +454,25 @@ func (s *Server) apiCreateNode(w http.ResponseWriter, r *http.Request) {
 		fetch = *req.FetchOG
 	}
 	if fetch && created.Type == "bookmark" {
-		s.applyOG(created)
-		created, _ = s.store.GetNode(created.ID)
+		s.applyOG(r.Context(), created)
+		created, _ = s.store.GetNode(r.Context(), created.ID)
 	}
 	writeJSON(w, 201, created)
 }
 
-func (s *Server) applyOG(n *store.Node) {
-	m := og.Fetch(n.URL)
-	_ = s.store.UpdateOG(n.ID, m.Title, m.Description, m.Image, m.Favicon)
+func (s *Server) applyOG(ctx context.Context, n *store.Node) {
+	m := og.Fetch(ctx, n.URL)
+	_ = s.store.UpdateOG(ctx, n.ID, m.Title, m.Description, m.Image, m.Favicon)
 	if strings.TrimSpace(n.Title) == n.URL || strings.TrimSpace(n.Title) == "" {
 		if m.Title != "" {
 			t := m.Title
-			_, _ = s.store.UpdateNode(n.ID, &t, nil, nil, nil)
+			_, _ = s.store.UpdateNode(ctx, n.ID, &t, nil, nil, nil)
 		}
 	}
 }
 
 func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
-	n, err := s.store.GetNode(r.PathValue("id"))
+	n, err := s.store.GetNode(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
@@ -459,11 +482,12 @@ func (s *Server) apiGetNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiPatchNode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Title            *string  `json:"title"`
-		URL              *string  `json:"url"`
-		Notes            *string  `json:"notes"`
-		Tags             *[]string `json:"tags"`
-		ConfirmDuplicate bool     `json:"confirmDuplicate"`
+		Title            *string         `json:"title"`
+		URL              *string         `json:"url"`
+		Notes            *string         `json:"notes"`
+		Tags             *[]string       `json:"tags"`
+		ParentID         json.RawMessage `json:"parentId"`
+		ConfirmDuplicate bool            `json:"confirmDuplicate"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
@@ -471,27 +495,62 @@ func (s *Server) apiPatchNode(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if req.URL != nil && !req.ConfirmDuplicate {
-		dups, _ := s.store.Duplicates(*req.URL, id)
+		dups, _ := s.store.Duplicates(r.Context(), *req.URL, id)
 		if len(dups) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "duplicate", "duplicates": dups})
 			return
 		}
 	}
-	old, _ := s.store.GetNode(id)
-	n, err := s.store.UpdateNode(id, req.Title, req.URL, req.Notes, req.Tags)
+	old, _ := s.store.GetNode(r.Context(), id)
+	n, err := s.store.UpdateNode(r.Context(), id, req.Title, req.URL, req.Notes, req.Tags)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	if len(req.ParentID) > 0 {
+		var parent *string
+		if string(req.ParentID) != "null" {
+			var pid string
+			if err := json.Unmarshal(req.ParentID, &pid); err != nil {
+				writeJSON(w, 400, map[string]string{"error": "bad parentId"})
+				return
+			}
+			if pid != "" {
+				parent = &pid
+			}
+		}
+		oldParent := ""
+		if old != nil && old.ParentID != nil {
+			oldParent = *old.ParentID
+		}
+		newParent := ""
+		if parent != nil {
+			newParent = *parent
+		}
+		if oldParent != newParent {
+			if err := s.store.MoveNode(r.Context(), id, parent, nil); err != nil {
+				msg := err.Error()
+				if errors.Is(err, store.ErrCycle) {
+					msg = "нельзя вложить папку в саму себя или в своего потомка"
+				}
+				if errors.Is(err, store.ErrInvalidParent) {
+					msg = "недопустимая родительская папка"
+				}
+				writeJSON(w, 400, map[string]string{"error": msg})
+				return
+			}
+			n, _ = s.store.GetNode(r.Context(), id)
+		}
+	}
 	if req.URL != nil && old != nil && old.URL != n.URL {
-		s.applyOG(n)
-		n, _ = s.store.GetNode(n.ID)
+		s.applyOG(r.Context(), n)
+		n, _ = s.store.GetNode(r.Context(), n.ID)
 	}
 	writeJSON(w, 200, n)
 }
 
 func (s *Server) apiDeleteNode(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.SoftDelete(r.PathValue("id")); err != nil {
+	if err := s.store.SoftDelete(r.Context(), r.PathValue("id")); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -507,7 +566,7 @@ func (s *Server) apiMoveNode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	if err := s.store.MoveNode(r.PathValue("id"), req.ParentID, req.BeforeID); err != nil {
+	if err := s.store.MoveNode(r.Context(), r.PathValue("id"), req.ParentID, req.BeforeID); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -515,7 +574,7 @@ func (s *Server) apiMoveNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiRestore(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Restore(r.PathValue("id")); err != nil {
+	if err := s.store.Restore(r.Context(), r.PathValue("id")); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -523,7 +582,7 @@ func (s *Server) apiRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Purge(r.PathValue("id")); err != nil {
+	if err := s.store.Purge(r.Context(), r.PathValue("id")); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -531,34 +590,34 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiRefreshOG(w http.ResponseWriter, r *http.Request) {
-	n, err := s.store.GetNode(r.PathValue("id"))
+	n, err := s.store.GetNode(r.Context(), r.PathValue("id"))
 	if err != nil || n.Type != "bookmark" {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
-	s.applyOG(n)
-	n, _ = s.store.GetNode(n.ID)
+	s.applyOG(r.Context(), n)
+	n, _ = s.store.GetNode(r.Context(), n.ID)
 	writeJSON(w, 200, n)
 }
 
 func (s *Server) apiCheckLink(w http.ResponseWriter, r *http.Request) {
-	n, err := s.store.GetNode(r.PathValue("id"))
+	n, err := s.store.GetNode(r.Context(), r.PathValue("id"))
 	if err != nil || n.Type != "bookmark" {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
-	st, msg := s.links.CheckOne(n.URL)
+	st, msg := s.links.CheckOne(r.Context(), n.URL)
 	var sp *int
 	if st > 0 {
 		sp = &st
 	}
-	_ = s.store.UpdateLink(n.ID, sp, msg)
-	n, _ = s.store.GetNode(n.ID)
+	_ = s.store.UpdateLink(r.Context(), n.ID, sp, msg)
+	n, _ = s.store.GetNode(r.Context(), n.ID)
 	writeJSON(w, 200, n)
 }
 
 func (s *Server) apiTrash(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.TrashRoots()
+	list, err := s.store.TrashRoots(r.Context())
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -570,7 +629,7 @@ func (s *Server) apiTrash(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiEmptyTrash(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.EmptyTrash(); err != nil {
+	if err := s.store.EmptyTrash(r.Context()); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
@@ -585,7 +644,7 @@ func (s *Server) apiCreateTag(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	t, err := s.store.EnsureTag(req.Name)
+	t, err := s.store.EnsureTag(r.Context(), req.Name)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -601,7 +660,7 @@ func (s *Server) apiPatchTag(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	if err := s.store.RenameTag(r.PathValue("id"), req.Name); err != nil {
+	if err := s.store.RenameTag(r.Context(), r.PathValue("id"), req.Name); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -609,7 +668,7 @@ func (s *Server) apiPatchTag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiDeleteTag(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteTag(r.PathValue("id")); err != nil {
+	if err := s.store.DeleteTag(r.Context(), r.PathValue("id")); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -618,7 +677,7 @@ func (s *Server) apiDeleteTag(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiExport(w http.ResponseWriter, r *http.Request) {
 	include := r.URL.Query().Get("trash") == "1"
-	data, err := s.store.ExportJSON(include)
+	data, err := s.store.ExportJSON(r.Context(), include)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -638,7 +697,7 @@ func (s *Server) apiImportJSON(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	if err := s.store.ImportJSON(req.Nodes, req.Replace); err != nil {
+	if err := s.store.ImportJSON(r.Context(), req.Nodes, req.Replace); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -657,7 +716,7 @@ func (s *Server) apiImportBrowser(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.FolderName) == "" {
 		req.FolderName = "Импорт браузера"
 	}
-	created, known, err := s.store.ImportBrowser(req.FolderName, req.Tree)
+	created, known, err := s.store.ImportBrowser(r.Context(), req.FolderName, req.Tree)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -666,12 +725,12 @@ func (s *Server) apiImportBrowser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiGetSettings(w http.ResponseWriter, r *http.Request) {
-	reqAuth, _ := s.store.Setting("require_extension_auth")
-	dir, _ := s.store.Setting("backup_dir")
-	iv, _ := s.store.Setting("backup_interval_hours")
-	ret, _ := s.store.Setting("backup_retention")
-	last, _ := s.store.Setting("last_backup_at")
-	sessions, _ := s.store.ExtSessions()
+	reqAuth, _ := s.store.Setting(r.Context(), "require_extension_auth")
+	dir, _ := s.store.Setting(r.Context(), "backup_dir")
+	iv, _ := s.store.Setting(r.Context(), "backup_interval_hours")
+	ret, _ := s.store.Setting(r.Context(), "backup_retention")
+	last, _ := s.store.Setting(r.Context(), "last_backup_at")
+	sessions, _ := s.store.ExtSessions(r.Context())
 	if sessions == nil {
 		sessions = []store.ExtSession{}
 	}
@@ -702,16 +761,16 @@ func (s *Server) apiPatchSettings(w http.ResponseWriter, r *http.Request) {
 		if *req.RequireExtensionAuth {
 			v = "1"
 		}
-		_ = s.store.SetSetting("require_extension_auth", v)
+		_ = s.store.SetSetting(r.Context(), "require_extension_auth", v)
 	}
 	if req.BackupDir != nil {
-		_ = s.store.SetSetting("backup_dir", *req.BackupDir)
+		_ = s.store.SetSetting(r.Context(), "backup_dir", *req.BackupDir)
 	}
 	if req.BackupIntervalHours != nil {
-		_ = s.store.SetSetting("backup_interval_hours", *req.BackupIntervalHours)
+		_ = s.store.SetSetting(r.Context(), "backup_interval_hours", *req.BackupIntervalHours)
 	}
 	if req.BackupRetention != nil {
-		_ = s.store.SetSetting("backup_retention", *req.BackupRetention)
+		_ = s.store.SetSetting(r.Context(), "backup_retention", *req.BackupRetention)
 	}
 	s.apiGetSettings(w, r)
 }
@@ -725,17 +784,17 @@ func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "укажите новый пароль"})
 		return
 	}
-	if err := s.store.ChangePassword(req.Current, req.Next); err != nil {
+	if err := s.store.ChangePassword(r.Context(), req.Current, req.Next); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	_ = s.store.DeleteAllWebSessions()
+	_ = s.store.DeleteAllWebSessions(r.Context())
 	s.clearCookie(w)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) apiBackup(w http.ResponseWriter, r *http.Request) {
-	j, q, err := backup.Run(s.store)
+	j, q, err := backup.Run(r.Context(), s.store)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -744,7 +803,7 @@ func (s *Server) apiBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiExtSessions(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ExtSessions()
+	list, err := s.store.ExtSessions(r.Context())
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -756,7 +815,7 @@ func (s *Server) apiExtSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiDeleteExtSession(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteExtSession(r.PathValue("id")); err != nil {
+	if err := s.store.DeleteExtSession(r.Context(), r.PathValue("id")); err != nil {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
@@ -764,10 +823,10 @@ func (s *Server) apiDeleteExtSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiCheckAll(w http.ResponseWriter, r *http.Request) {
-	started := s.links.CheckAll()
+	started := s.links.CheckAll(r.Context())
 	writeJSON(w, 202, map[string]any{"started": started, "status": s.links.Status()})
 }
 
-func (s *Server) apiLinkStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) apiLinkStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, s.links.Status())
 }

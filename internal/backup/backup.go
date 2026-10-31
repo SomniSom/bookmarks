@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,8 +13,8 @@ import (
 	"bookmarks/internal/store"
 )
 
-func Run(st *store.Store) (string, string, error) {
-	dir, _ := st.Setting("backup_dir")
+func Run(ctx context.Context, st *store.Store) (string, string, error) {
+	dir, _ := st.Setting(ctx, "backup_dir")
 	if strings.TrimSpace(dir) == "" {
 		dir = "./backups"
 	}
@@ -23,45 +24,51 @@ func Run(st *store.Store) (string, string, error) {
 	ts := time.Now().UTC().Format("20060102T150405")
 	jsonPath := filepath.Join(dir, "bookmarks-"+ts+".json")
 	sqlitePath := filepath.Join(dir, "bookmarks-"+ts+".sqlite")
-	data, err := st.ExportJSON(false)
+	data, err := st.ExportJSON(ctx, false)
 	if err != nil {
 		return "", "", err
 	}
 	if err := os.WriteFile(jsonPath, data, 0o600); err != nil {
 		return "", "", err
 	}
-	if err := st.VacuumInto(sqlitePath); err != nil {
+	if err := st.VacuumInto(ctx, sqlitePath); err != nil {
 		return jsonPath, "", err
 	}
-	_ = st.SetSetting("last_backup_at", time.Now().UTC().Format(time.RFC3339Nano))
-	prune(dir, retention(st))
+	_ = st.SetSetting(ctx, "last_backup_at", time.Now().UTC().Format(time.RFC3339Nano))
+	prune(dir, retention(ctx, st))
 	return jsonPath, sqlitePath, nil
 }
 
-func StartTicker(st *store.Store) {
+func StartTicker(ctx context.Context, st *store.Store) {
 	t := time.NewTicker(time.Minute)
 	go func() {
-		for range t.C {
-			hours := intervalHours(st)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			hours := intervalHours(ctx, st)
 			if hours <= 0 {
 				continue
 			}
-			last, _ := st.Setting("last_backup_at")
+			last, _ := st.Setting(ctx, "last_backup_at")
 			if last != "" {
 				when, err := time.Parse(time.RFC3339Nano, last)
 				if err == nil && time.Since(when) < time.Duration(hours)*time.Hour {
 					continue
 				}
 			}
-			if _, _, err := Run(st); err != nil {
+			if _, _, err := Run(ctx, st); err != nil {
 				log.Printf("backup: %v", err)
 			}
 		}
 	}()
 }
 
-func intervalHours(st *store.Store) int {
-	v, _ := st.Setting("backup_interval_hours")
+func intervalHours(ctx context.Context, st *store.Store) int {
+	v, _ := st.Setting(ctx, "backup_interval_hours")
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil {
 		return 24
@@ -69,8 +76,8 @@ func intervalHours(st *store.Store) int {
 	return n
 }
 
-func retention(st *store.Store) int {
-	v, _ := st.Setting("backup_retention")
+func retention(ctx context.Context, st *store.Store) int {
+	v, _ := st.Setting(ctx, "backup_retention")
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 1 {
 		return 14
