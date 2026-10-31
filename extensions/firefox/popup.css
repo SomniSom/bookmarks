@@ -1,5 +1,6 @@
-body { font: 13px/1.4 system-ui, sans-serif; width: 320px; margin: 0; padding: 10px 12px; background: #14110c; color: #efe7d6; }
-h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
+body { font: 13px/1.4 system-ui, sans-serif; width: 360px; margin: 0; padding: 10px 12px 8px; background: #14110c; color: #efe7d6; }
+h1 { font-size: 1.05rem; margin: 0; }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; margin-bottom: .35rem; }
 label { display: block; margin: .4rem 0; color: #9a907c; }
 input, select { width: 100%; box-sizing: border-box; margin-top: .15rem; background: #0f0d0a; color: #efe7d6; border: 1px solid #2e2a22; border-radius: 4px; padding: .35rem; }
 button { margin-top: .45rem; width: 100%; padding: .4rem; border: 0; border-radius: 4px; background: #d0a24a; color: #1a1408; cursor: pointer; }
@@ -8,3 +9,29 @@ button.ghost { background: transparent; color: #efe7d6; border: 1px solid #2e2a2
 .warn, .err { color: #f0c8c0; }
 .ok { color: #b5d19a; }
 hr { border: 0; border-top: 1px solid #2e2a22; margin: .8rem 0; }
+.tabs { display: flex; gap: 4px; margin: .35rem 0 .5rem; }
+.tab { width: auto; flex: 1; margin-top: 0; background: #1b1813; color: #9a907c; border: 1px solid #2e2a22; }
+.tab.on { background: #d0a24a; color: #1a1408; }
+#q { margin: 0 0 .4rem; }
+.new-folder { display: flex; gap: 4px; margin: 0 0 .25rem; }
+.new-folder input { margin: 0; flex: 1; }
+.new-folder button { margin: 0; width: auto; flex: none; padding: .35rem .65rem; }
+#folderParent { margin: 0 0 .35rem; }
+.tree { max-height: 340px; overflow: auto; margin: 0 -4px; padding: 0 0 .2rem; }
+.row {
+  display: flex; align-items: center; gap: .3rem;
+  padding: .22rem .4rem; border-radius: 4px; cursor: pointer;
+  white-space: nowrap; user-select: none;
+}
+.row:hover { background: #221e18; }
+.row.selected { background: #2a241b; }
+.row .tw { width: 1rem; flex: none; color: #9a907c; }
+.row .ico { width: 1rem; flex: none; display: flex; }
+.row .ico img { width: 14px; height: 14px; }
+.row .title { overflow: hidden; text-overflow: ellipsis; }
+.row .path { color: #9a907c; font-size: .7rem; margin-left: auto; max-width: 42%; overflow: hidden; text-overflow: ellipsis; }
+.row.dead { color: #c45c4a; }
+.empty { color: #9a907c; padding: .8rem .2rem; }
+.footer { display: flex; gap: 6px; margin-top: .35rem; }
+.footer button { margin-top: 0; }
+#status { min-height: 1.1em; margin: .25rem 0 0; }

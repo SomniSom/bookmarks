@@ -1,6 +1,8 @@
-importScripts("api.js");
+if (typeof importScripts === "function") {
+  importScripts("api.js");
+}
 
-const ext = typeof browser !== "undefined" ? browser : chrome;
+// ext объявлен в api.js (тот же глобальный скоуп: Chrome importScripts / Firefox scripts[])
 
 async function lastFolder() {
   const { lastFolderId } = await ext.storage.local.get("lastFolderId");
